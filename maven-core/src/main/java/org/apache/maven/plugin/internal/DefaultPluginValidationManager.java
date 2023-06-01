@@ -22,6 +22,8 @@ import javax.inject.Named;
 import javax.inject.Singleton;
 
 import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -58,6 +60,7 @@ public final class DefaultPluginValidationManager extends AbstractEventSpy imple
         NONE, // mute validation completely (validation issue collection still happens, it is just not reported!)
         INLINE, // inline, each "internal" problem one line next to mojo invocation
         SUMMARY, // at end, list of plugin GAVs along with "internal" issues
+        BRIEF, // synonym to SUMMARY
         VERBOSE // at end, list of plugin GAVs along with detailed report of ANY validation issues
     }
 
@@ -160,12 +163,11 @@ public final class DefaultPluginValidationManager extends AbstractEventSpy imple
             return; // we were asked to not report anything OR reporting already happened inline
         }
         ConcurrentHashMap<String, PluginValidationIssues> issuesMap = pluginIssues(mavenSession.getRepositorySession());
-        if (!issuesMap.isEmpty()) {
+        EnumSet<IssueLocality> issueLocalitiesToReport = validationReportLevel == ValidationReportLevel.VERBOSE
+                ? EnumSet.allOf(IssueLocality.class)
+                : EnumSet.of(IssueLocality.INTERNAL);
 
-            EnumSet<IssueLocality> issueLocalitiesToReport = validationReportLevel == ValidationReportLevel.VERBOSE
-                    ? EnumSet.allOf(IssueLocality.class)
-                    : EnumSet.of(IssueLocality.INTERNAL);
-
+        if (hasAnythingToReport(issuesMap, issueLocalitiesToReport)) {
             logger.warn("");
             logger.warn("Plugin {} validation issues were detected in following plugin(s)", issueLocalitiesToReport);
             logger.warn("");
@@ -226,6 +228,16 @@ public final class DefaultPluginValidationManager extends AbstractEventSpy imple
         }
     }
 
+    private boolean hasAnythingToReport(
+            Map<String, PluginValidationIssues> issuesMap, EnumSet<IssueLocality> issueLocalitiesToReport) {
+        for (PluginValidationIssues issues : issuesMap.values()) {
+            if (hasAnythingToReport(issues, issueLocalitiesToReport)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private boolean hasAnythingToReport(PluginValidationIssues issues, EnumSet<IssueLocality> issueLocalitiesToReport) {
         for (IssueLocality issueLocality : issueLocalitiesToReport) {
             Set<String> pluginIssues = issues.pluginIssues.get(issueLocality);
@@ -251,16 +263,12 @@ public final class DefaultPluginValidationManager extends AbstractEventSpy imple
                 if (location.contains("://")) {
                     stringBuilder.append(" (").append(location).append(")");
                 } else {
-                    File rootBasedir = mavenSession.getTopLevelProject().getBasedir();
-                    File locationFile = new File(location);
-                    if (location.startsWith(rootBasedir.getPath())) {
-                        stringBuilder
-                                .append(" (")
-                                .append(rootBasedir.toPath().relativize(locationFile.toPath()))
-                                .append(")");
-                    } else {
-                        stringBuilder.append(" (").append(location).append(")");
+                    Path topDirectory = mavenSession.getTopDirectory();
+                    Path locationPath = Paths.get(location).toAbsolutePath().normalize();
+                    if (locationPath.startsWith(topDirectory)) {
+                        locationPath = topDirectory.relativize(locationPath);
                     }
+                    stringBuilder.append(" (").append(locationPath).append(")");
                 }
             }
             stringBuilder.append(" @ line ").append(inputLocation.getLineNumber());
@@ -275,8 +283,12 @@ public final class DefaultPluginValidationManager extends AbstractEventSpy imple
         String result = prj.getGroupId() + ":" + prj.getArtifactId() + ":" + prj.getVersion();
         File currentPom = prj.getFile();
         if (currentPom != null) {
-            File rootBasedir = mavenSession.getTopLevelProject().getBasedir();
-            result += " (" + rootBasedir.toPath().relativize(currentPom.toPath()) + ")";
+            Path topDirectory = mavenSession.getTopDirectory();
+            Path current = currentPom.toPath().toAbsolutePath().normalize();
+            if (current.startsWith(topDirectory)) {
+                current = topDirectory.relativize(current);
+            }
+            result += " (" + current + ")";
         }
         return result;
     }
