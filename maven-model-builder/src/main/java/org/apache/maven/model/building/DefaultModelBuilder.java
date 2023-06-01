@@ -1033,11 +1033,13 @@ public class DefaultModelBuilder implements ModelBuilder {
 
             if (source != null) {
                 try {
-                    org.apache.maven.api.model.InputSource v4src =
-                            model.getLocation("").getSource();
-                    Field field = InputSource.class.getDeclaredField("modelId");
-                    field.setAccessible(true);
-                    field.set(v4src, ModelProblemUtils.toId(model));
+                    org.apache.maven.api.model.InputLocation loc = model.getLocation("");
+                    org.apache.maven.api.model.InputSource v4src = loc != null ? loc.getSource() : null;
+                    if (v4src != null) {
+                        Field field = InputSource.class.getDeclaredField("modelId");
+                        field.setAccessible(true);
+                        field.set(v4src, ModelProblemUtils.toId(model));
+                    }
                 } catch (Throwable t) {
                     // TODO: use a lazy source ?
                     throw new IllegalStateException("Unable to set modelId on InputSource", t);
@@ -1575,7 +1577,7 @@ public class DefaultModelBuilder implements ModelBuilder {
     }
 
     private Model getSuperModel() {
-        return new Model(superPomProvider.getSuperModel("4.0.0"));
+        return superPomProvider.getSuperModel("4.0.0");
     }
 
     private void importDependencyManagement(

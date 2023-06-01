@@ -16,23 +16,28 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.maven.plugin.internal;
+package org.apache.maven.internal.impl;
 
-import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.resolution.ArtifactDescriptorResult;
+import javax.inject.Inject;
+import javax.inject.Named;
+import javax.inject.Singleton;
 
-/**
- * Service responsible for validating plugin dependencies.
- *
- * @since 3.9.3
- */
-interface MavenPluginDependenciesValidator {
-    /**
-     * Checks mojo dependency issues.
-     */
-    void validate(
-            RepositorySystemSession session,
-            Artifact pluginArtifact,
-            ArtifactDescriptorResult artifactDescriptorResult);
+import org.apache.maven.api.model.Model;
+import org.apache.maven.api.services.SuperPomProvider;
+
+@Named
+@Singleton
+public class DefaultSuperPomProvider implements SuperPomProvider {
+
+    private final org.apache.maven.model.superpom.SuperPomProvider provider;
+
+    @Inject
+    public DefaultSuperPomProvider(org.apache.maven.model.superpom.SuperPomProvider provider) {
+        this.provider = provider;
+    }
+
+    @Override
+    public Model getSuperPom(String version) {
+        return provider.getSuperModel(version).getDelegate();
+    }
 }

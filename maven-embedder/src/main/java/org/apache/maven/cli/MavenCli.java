@@ -31,16 +31,8 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Properties;
-import java.util.ServiceLoader;
-import java.util.Set;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -109,6 +101,9 @@ import org.codehaus.plexus.classworlds.ClassWorld;
 import org.codehaus.plexus.classworlds.realm.ClassRealm;
 import org.codehaus.plexus.classworlds.realm.NoSuchRealmException;
 import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
+import org.codehaus.plexus.interpolation.AbstractValueSource;
+import org.codehaus.plexus.interpolation.BasicInterpolator;
+import org.codehaus.plexus.interpolation.StringSearchInterpolator;
 import org.codehaus.plexus.logging.LoggerManager;
 import org.codehaus.plexus.util.StringUtils;
 import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
@@ -335,10 +330,10 @@ public class MavenCli {
         for (String arg : cliRequest.args) {
             if (isAltFile) {
                 // this is the argument following -f/--file
-                Path path = Paths.get(arg);
+                Path path = topDirectory.resolve(arg);
                 if (Files.isDirectory(path)) {
                     topDirectory = path;
-                } else if (Files.isRegularFile(topDirectory)) {
+                } else if (Files.isRegularFile(path)) {
                     topDirectory = path.getParent();
                     if (!Files.isDirectory(topDirectory)) {
                         System.err.println("Directory " + topDirectory
@@ -356,12 +351,7 @@ public class MavenCli {
                 isAltFile = arg.equals(String.valueOf(CLIManager.ALTERNATE_POM_FILE)) || arg.equals("file");
             }
         }
-        try {
-            topDirectory = topDirectory.toAbsolutePath().toRealPath();
-        } catch (IOException e) {
-            System.err.println("Error computing real path from " + topDirectory);
-            throw new ExitException(1);
-        }
+        topDirectory = getCanonicalPath(topDirectory);
         cliRequest.topDirectory = topDirectory;
         // We're very early in the process and we don't have the container set up yet,
         // so we rely on the JDK services to eventually lookup a custom RootLocator.
@@ -617,8 +607,34 @@ public class MavenCli {
 
     // Needed to make this method package visible to make writing a unit test possible
     // Maybe it's better to move some of those methods to separate class (SoC).
-    void properties(CliRequest cliRequest) {
-        populateProperties(cliRequest.commandLine, cliRequest.systemProperties, cliRequest.userProperties);
+    void properties(CliRequest cliRequest) throws Exception {
+        Properties paths = new Properties();
+        if (cliRequest.topDirectory != null) {
+            paths.put("session.topDirectory", cliRequest.topDirectory.toString());
+        }
+        if (cliRequest.rootDirectory != null) {
+            paths.put("session.rootDirectory", cliRequest.rootDirectory.toString());
+        }
+
+        populateProperties(cliRequest.commandLine, paths, cliRequest.systemProperties, cliRequest.userProperties);
+
+        // now that we have properties, interpolate all arguments
+        BasicInterpolator interpolator =
+                createInterpolator(paths, cliRequest.systemProperties, cliRequest.userProperties);
+        CommandLine.Builder commandLineBuilder = new CommandLine.Builder();
+        for (Option option : cliRequest.commandLine.getOptions()) {
+            if (!String.valueOf(CLIManager.SET_USER_PROPERTY).equals(option.getOpt())) {
+                List<String> values = option.getValuesList();
+                for (ListIterator<String> it = values.listIterator(); it.hasNext(); ) {
+                    it.set(interpolator.interpolate(it.next()));
+                }
+            }
+            commandLineBuilder.addOption(option);
+        }
+        for (String arg : cliRequest.commandLine.getArgList()) {
+            commandLineBuilder.addArg(interpolator.interpolate(arg));
+        }
+        cliRequest.commandLine = commandLineBuilder.build();
     }
 
     PlexusContainer container(CliRequest cliRequest) throws Exception {
@@ -831,7 +847,7 @@ public class MavenCli {
 
         List<File> jars = new ArrayList<>();
 
-        if (StringUtils.isNotEmpty(extClassPath)) {
+        if (extClassPath != null && !extClassPath.isEmpty()) {
             for (String jar : StringUtils.split(extClassPath, File.pathSeparator)) {
                 File file = resolveFile(new File(jar), cliRequest.workingDirectory);
 
@@ -1040,7 +1056,7 @@ public class MavenCli {
 
         String msg = summary.getMessage();
 
-        if (StringUtils.isNotEmpty(referenceKey)) {
+        if (referenceKey != null && !referenceKey.isEmpty()) {
             if (msg.indexOf('\n') < 0) {
                 msg += " -> " + buffer().strong(referenceKey);
             } else {
@@ -1536,7 +1552,9 @@ public class MavenCli {
     // Properties handling
     // ----------------------------------------------------------------------
 
-    static void populateProperties(CommandLine commandLine, Properties systemProperties, Properties userProperties) {
+    static void populateProperties(
+            CommandLine commandLine, Properties paths, Properties systemProperties, Properties userProperties)
+            throws Exception {
         EnvironmentUtils.addEnvVars(systemProperties);
 
         // ----------------------------------------------------------------------
@@ -1547,7 +1565,6 @@ public class MavenCli {
 
         final Properties userSpecifiedProperties =
                 commandLine.getOptionProperties(String.valueOf(CLIManager.SET_USER_PROPERTY));
-        userSpecifiedProperties.forEach((prop, value) -> setCliProperty((String) prop, (String) value, userProperties));
 
         SystemProperties.addSystemProperties(systemProperties);
 
@@ -1563,17 +1580,46 @@ public class MavenCli {
 
         String mavenBuildVersion = CLIReportingUtils.createMavenVersionString(buildProperties);
         systemProperties.setProperty("maven.build.version", mavenBuildVersion);
+
+        BasicInterpolator interpolator =
+                createInterpolator(paths, systemProperties, userProperties, userSpecifiedProperties);
+        for (Map.Entry<Object, Object> e : userSpecifiedProperties.entrySet()) {
+            String name = (String) e.getKey();
+            String value = interpolator.interpolate((String) e.getValue());
+            userProperties.setProperty(name, value);
+            // ----------------------------------------------------------------------
+            // I'm leaving the setting of system properties here as not to break
+            // the SystemPropertyProfileActivator. This won't harm embedding. jvz.
+            // ----------------------------------------------------------------------
+            if (System.getProperty(name) == null) {
+                System.setProperty(name, value);
+            }
+        }
     }
 
-    private static void setCliProperty(String name, String value, Properties properties) {
-        properties.setProperty(name, value);
+    private static BasicInterpolator createInterpolator(Properties... properties) {
+        StringSearchInterpolator interpolator = new StringSearchInterpolator();
+        interpolator.addValueSource(new AbstractValueSource(false) {
+            @Override
+            public Object getValue(String expression) {
+                for (Properties props : properties) {
+                    Object val = props.getProperty(expression);
+                    if (val != null) {
+                        return val;
+                    }
+                }
+                return null;
+            }
+        });
+        return interpolator;
+    }
 
-        // ----------------------------------------------------------------------
-        // I'm leaving the setting of system properties here as not to break
-        // the SystemPropertyProfileActivator. This won't harm embedding. jvz.
-        // ----------------------------------------------------------------------
-
-        System.setProperty(name, value);
+    private static Path getCanonicalPath(Path path) {
+        try {
+            return path.toRealPath();
+        } catch (IOException e) {
+            return getCanonicalPath(path.getParent()).resolve(path.getFileName());
+        }
     }
 
     static class ExitException extends Exception {

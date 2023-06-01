@@ -56,7 +56,6 @@ import org.apache.maven.plugin.PluginIncompatibleException;
 import org.apache.maven.plugin.PluginManagerException;
 import org.apache.maven.plugin.descriptor.MojoDescriptor;
 import org.apache.maven.project.MavenProject;
-import org.codehaus.plexus.util.StringUtils;
 import org.eclipse.aether.SessionData;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -126,7 +125,7 @@ public class MojoExecutor {
     private Collection<String> toScopes(String classpath) {
         Collection<String> scopes = Collections.emptyList();
 
-        if (StringUtils.isNotEmpty(classpath)) {
+        if (classpath != null && !classpath.isEmpty()) {
             if (Artifact.SCOPE_COMPILE.equals(classpath)) {
                 scopes = Arrays.asList(Artifact.SCOPE_COMPILE, Artifact.SCOPE_SYSTEM, Artifact.SCOPE_PROVIDED);
             } else if (Artifact.SCOPE_RUNTIME.equals(classpath)) {
@@ -274,16 +273,8 @@ public class MojoExecutor {
         @SuppressWarnings({"unchecked", "rawtypes"})
         private OwnerReentrantLock getProjectLock(MavenSession session) {
             SessionData data = session.getRepositorySession().getData();
-            // TODO: when resolver 1.7.3 is released, the code below should be changed to
-            // TODO: Map<MavenProject, Lock> locks = ( Map ) ((Map) data).computeIfAbsent(
-            // TODO:         ProjectLock.class, l -> new ConcurrentHashMap<>() );
-            Map<MavenProject, OwnerReentrantLock> locks = (Map) data.get(ProjectLock.class);
-            // initialize the value if not already done (in case of a concurrent access) to the method
-            if (locks == null) {
-                // the call to data.set(k, null, v) is effectively a call to data.putIfAbsent(k, v)
-                data.set(ProjectLock.class, null, new ConcurrentHashMap<>());
-                locks = (Map) data.get(ProjectLock.class);
-            }
+            Map<MavenProject, OwnerReentrantLock> locks =
+                    (Map) data.computeIfAbsent(ProjectLock.class, ConcurrentHashMap::new);
             return locks.computeIfAbsent(session.getCurrentProject(), p -> new OwnerReentrantLock());
         }
     }
@@ -398,10 +389,10 @@ public class MojoExecutor {
         String scopeToCollect = mojoDescriptor.getDependencyCollectionRequired();
 
         List<String> scopes = new ArrayList<>(2);
-        if (StringUtils.isNotEmpty(scopeToCollect)) {
+        if (scopeToCollect != null && !scopeToCollect.isEmpty()) {
             scopes.add(scopeToCollect);
         }
-        if (StringUtils.isNotEmpty(scopeToResolve)) {
+        if (scopeToResolve != null && !scopeToResolve.isEmpty()) {
             scopes.add(scopeToResolve);
         }
 

@@ -22,26 +22,23 @@ import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
 
-import java.util.Set;
-import java.util.stream.Collectors;
-
 import org.apache.maven.plugin.PluginValidationManager;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.graph.Dependency;
 import org.eclipse.aether.resolution.ArtifactDescriptorResult;
+import org.eclipse.aether.util.artifact.JavaScopes;
 
 /**
- * Detects mixed Maven versions in plugins.
+ * Detects Maven3 plugins using maven-compat Maven2 compatibility layer.
  *
- * @since 3.9.2
+ * @since 3.9.3
  */
 @Singleton
 @Named
-class MavenMixedDependenciesValidator extends AbstractMavenPluginDependenciesValidator {
+class Maven3CompatDependenciesValidator extends AbstractMavenPluginDependenciesValidator {
 
     @Inject
-    MavenMixedDependenciesValidator(PluginValidationManager pluginValidationManager) {
+    Maven3CompatDependenciesValidator(PluginValidationManager pluginValidationManager) {
         super(pluginValidationManager);
     }
 
@@ -50,20 +47,16 @@ class MavenMixedDependenciesValidator extends AbstractMavenPluginDependenciesVal
             RepositorySystemSession session,
             Artifact pluginArtifact,
             ArtifactDescriptorResult artifactDescriptorResult) {
-        Set<String> mavenVersions = artifactDescriptorResult.getDependencies().stream()
-                .map(Dependency::getArtifact)
-                .filter(d -> "org.apache.maven".equals(d.getGroupId()))
-                .filter(d -> !DefaultPluginValidationManager.EXPECTED_PROVIDED_SCOPE_EXCLUSIONS_GA.contains(
-                        d.getGroupId() + ":" + d.getArtifactId()))
-                .map(Artifact::getVersion)
-                .collect(Collectors.toSet());
-
-        if (mavenVersions.size() > 1) {
-            pluginValidationManager.reportPluginValidationIssue(
-                    PluginValidationManager.IssueLocality.EXTERNAL,
-                    session,
-                    pluginArtifact,
-                    "Plugin mixes multiple Maven versions: " + mavenVersions);
+        for (org.eclipse.aether.graph.Dependency dependency : artifactDescriptorResult.getDependencies()) {
+            if ("org.apache.maven".equals(dependency.getArtifact().getGroupId())
+                    && "maven-compat".equals(dependency.getArtifact().getArtifactId())
+                    && !JavaScopes.TEST.equals(dependency.getScope())) {
+                pluginValidationManager.reportPluginValidationIssue(
+                        PluginValidationManager.IssueLocality.EXTERNAL,
+                        session,
+                        pluginArtifact,
+                        "Plugin depends on the deprecated Maven 2.x compatibility layer, which will be not supported in Maven 4.x");
+            }
         }
     }
 }

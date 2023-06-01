@@ -16,23 +16,24 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.maven.plugin.internal;
+package org.apache.maven.api.services;
 
-import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.resolution.ArtifactDescriptorResult;
+import org.apache.maven.api.Service;
+import org.apache.maven.api.annotations.Experimental;
+import org.apache.maven.api.model.Model;
 
 /**
- * Service responsible for validating plugin dependencies.
- *
- * @since 3.9.3
+ * Provides the super POM that all models implicitly inherit from.
  */
-interface MavenPluginDependenciesValidator {
+@Experimental
+public interface SuperPomProvider extends Service {
+
     /**
-     * Checks mojo dependency issues.
+     * Gets the super POM for the specified model version.
+     *
+     * @param version The model version to retrieve the super POM for (e.g. "4.0.0"), must not be {@code null}.
+     * @return The super POM, never {@code null}.
+     * @throws IllegalStateException if the super POM could not be retrieved
      */
-    void validate(
-            RepositorySystemSession session,
-            Artifact pluginArtifact,
-            ArtifactDescriptorResult artifactDescriptorResult);
+    Model getSuperPom(String version);
 }
